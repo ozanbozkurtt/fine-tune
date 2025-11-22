@@ -1,0 +1,137 @@
+---
+- name: Ubuntu Performance Fine-Tune Playbook
+  hosts: all
+  become: yes
+  gather_facts: yes
+  
+  vars:
+    timezone: "Europe/Istanbul"
+    net_interface: "ens160"
+    sysctl_conf: "/etc/sysctl.conf"
+    limits_conf: "/etc/security/limits.conf"
+    backup_date: "{{ ansible_date_time.date }}"
+
+  tasks:
+    - name: Stop and disable apt-daily timers
+      systemd:
+        name: "{{ item }}"
+        state: stopped
+        enabled: no
+      loop:
+        - apt-daily.timer
+        - apt-daily-upgrade.timer
+      ignore_errors: yes
+
+    - name: Stop and disable unattended-upgrades
+      systemd:
+        name: unattended-upgrades
+        state: stopped
+        enabled: no
+      ignore_errors: yes
+
+    - name: Set timezone
+      timezone:
+        name: "{{ timezone }}"
+
+    - name: Enable NTP synchronization
+      command: timedatectl set-ntp true
+      changed_when: false
+
+    - name: Update apt cache
+      apt:
+        update_cache: yes
+        cache_valid_time: 3600
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+        autoclean: yes
+
+    - name: Check if network interface exists
+      shell: ip link show {{ net_interface }}
+      register: interface_check
+      failed_when: false
+      changed_when: false
+
+    - name: Disable TX offload on network interface
+      command: ethtool -K {{ net_interface }} tx off
+      when: interface_check.rc == 0
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Disable TX checksum IP generic on network interface
+      command: ethtool -K {{ net_interface }} tx-checksum-ip-generic off
+      when: interface_check.rc == 0
+      ignore_errors: yes
+      changed_when: false
+
+    - name: Backup sysctl.conf
+      copy:
+        src: "{{ sysctl_conf }}"
+        dest: "{{ sysctl_conf }}.bak.{{ backup_date }}"
+        remote_src: yes
+        backup: no
+
+    - name: Configure kernel parameters in sysctl.conf
+      blockinfile:
+        path: "{{ sysctl_conf }}"
+        block: |
+          # Virtual Memory Management
+          vm.swappiness = 10
+          vm.vfs_cache_pressure = 50
+          
+          # Network Performance (High Traffic)
+          net.core.rmem_max = 16777216
+          net.core.wmem_max = 16777216
+          net.ipv4.tcp_rmem = 4096 87380 16777216
+          net.ipv4.tcp_wmem = 4096 65536 16777216
+          net.ipv4.tcp_tw_reuse = 1
+          
+          # Additional Network Optimizations
+          net.core.netdev_max_backlog = 5000
+          net.ipv4.tcp_max_syn_backlog = 8192
+          net.ipv4.tcp_slow_start_after_idle = 0
+          net.ipv4.tcp_fin_timeout = 30
+          
+          # File System
+          fs.file-max = 2097152
+          
+          # Security
+          net.ipv4.tcp_syncookies = 1
+          net.ipv4.conf.all.rp_filter = 1
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - Performance Tuning"
+        create: no
+
+    - name: Apply sysctl parameters
+      command: sysctl -p
+      changed_when: false
+
+    - name: Backup limits.conf
+      copy:
+        src: "{{ limits_conf }}"
+        dest: "{{ limits_conf }}.bak.{{ backup_date }}"
+        remote_src: yes
+        backup: no
+
+    - name: Configure system resource limits
+      blockinfile:
+        path: "{{ limits_conf }}"
+        block: |
+          * soft nofile 65535
+          * hard nofile 65535
+          * soft nproc 65535
+          * hard nproc 65535
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - Resource Limits"
+        create: no
+
+    - name: Make network interface settings persistent
+      lineinfile:
+        path: /etc/network/if-up.d/ethtool-settings
+        line: |
+          #!/bin/sh
+          ethtool -K {{ net_interface }} tx off
+          ethtool -K {{ net_interface }} tx-checksum-ip-generic off
+        create: yes
+        mode: '0755'
+      when: interface_check.rc == 0
