@@ -9,6 +9,8 @@
     net_interface: "ens160"
     sysctl_conf: "/etc/sysctl.conf"
     limits_conf: "/etc/security/limits.conf"
+    bashrc_conf: "/etc/bash.bashrc"
+    journald_conf: "/etc/systemd/journald.conf"
     backup_date: "{{ ansible_date_time.date }}"
 
   tasks:
@@ -28,6 +30,14 @@
         state: stopped
         enabled: no
       ignore_errors: yes
+
+    - name: Disable APT automatic updates
+      copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        content: |
+          APT::Periodic::Update-Package-Lists "0";
+          APT::Periodic::Unattended-Upgrade "0";
+        mode: '0644'
 
     - name: Set timezone
       timezone:
@@ -88,18 +98,17 @@
           net.ipv4.tcp_wmem = 4096 65536 16777216
           net.ipv4.tcp_tw_reuse = 1
           
-          # Additional Network Optimizations
-          net.core.netdev_max_backlog = 5000
-          net.ipv4.tcp_max_syn_backlog = 8192
-          net.ipv4.tcp_slow_start_after_idle = 0
-          net.ipv4.tcp_fin_timeout = 30
+          # Connection tracking table size
+          net.netfilter.nf_conntrack_max = 262144
           
-          # File System
+          # File descriptor ve inotify limitleri
           fs.file-max = 2097152
+          fs.inotify.max_user_watches = 524288
+          fs.inotify.max_user_instances = 512
           
-          # Security
-          net.ipv4.tcp_syncookies = 1
-          net.ipv4.conf.all.rp_filter = 1
+          # Shared memory
+          kernel.shmmax = 68719476736
+          kernel.shmall = 4294967296
         marker: "# {mark} ANSIBLE MANAGED BLOCK - Performance Tuning"
         create: no
 
@@ -120,18 +129,90 @@
         block: |
           * soft nofile 65535
           * hard nofile 65535
-          * soft nproc 65535
-          * hard nproc 65535
         marker: "# {mark} ANSIBLE MANAGED BLOCK - Resource Limits"
         create: no
 
-    - name: Make network interface settings persistent
+    - name: Backup bash.bashrc
+      copy:
+        src: "{{ bashrc_conf }}"
+        dest: "{{ bashrc_conf }}.bak.{{ backup_date }}"
+        remote_src: yes
+        backup: no
+
+    - name: Configure bash history settings
+      blockinfile:
+        path: "{{ bashrc_conf }}"
+        block: |
+          # History ayarları
+          export HISTSIZE=10000
+          export HISTFILESIZE=20000
+          export HISTTIMEFORMAT="%F %T "
+          export HISTCONTROL=ignoredups:erasedups
+          shopt -s histappend
+          PROMPT_COMMAND="history -a; history -c; history -r; $PROMPT_COMMAND"
+        marker: "# {mark} ANSIBLE MANAGED BLOCK - History Settings"
+        create: no
+
+    - name: Backup journald.conf
+      copy:
+        src: "{{ journald_conf }}"
+        dest: "{{ journald_conf }}.bak.{{ backup_date }}"
+        remote_src: yes
+        backup: no
+
+    - name: Configure journald log limits
       lineinfile:
-        path: /etc/network/if-up.d/ethtool-settings
-        line: |
+        path: "{{ journald_conf }}"
+        regexp: "^#?{{ item.key }}="
+        line: "{{ item.key }}={{ item.value }}"
+        state: present
+      loop:
+        - { key: 'SystemMaxUse', value: '500M' }
+        - { key: 'SystemMaxFileSize', value: '50M' }
+        - { key: 'MaxRetentionSec', value: '1month' }
+
+    - name: Restart systemd-journald
+      systemd:
+        name: systemd-journald
+        state: restarted
+
+    - name: Install monitoring tools
+      apt:
+        name:
+          - htop
+          - iotop
+          - nethogs
+          - ncdu
+          - dstat
+        state: present
+        update_cache: yes
+
+    - name: Check disk type and set I/O scheduler (immediate)
+      shell: |
+        if [ -b /sys/block/sda/queue/scheduler ]; then
+          echo "none" > /sys/block/sda/queue/scheduler 2>/dev/null || echo "noop" > /sys/block/sda/queue/scheduler 2>/dev/null
+        fi
+      changed_when: false
+      ignore_errors: yes
+
+    - name: Create persistent I/O scheduler rules
+      copy:
+        dest: /etc/udev/rules.d/60-scheduler.rules
+        content: |
+          ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
+          ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline"
+        mode: '0644'
+
+    - name: Make network interface settings persistent
+      copy:
+        dest: /etc/network/if-up.d/ethtool-settings
+        content: |
           #!/bin/sh
           ethtool -K {{ net_interface }} tx off
           ethtool -K {{ net_interface }} tx-checksum-ip-generic off
-        create: yes
         mode: '0755'
       when: interface_check.rc == 0
+
+    - name: Display completion message
+      debug:
+        msg: "Fine-tune işlemleri tamamlandı. Değişikliklerin tam olarak aktif olması için sistemi yeniden başlatmanız önerilir."

@@ -5,6 +5,12 @@ systemctl disable apt-daily.timer apt-daily-upgrade.timer
 systemctl stop unattended-upgrades
 systemctl disable unattended-upgrades
 
+# APT otomatik güncellemelerini devre dışı bırak
+cat << 'EOF' > /etc/apt/apt.conf.d/20auto-upgrades
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+EOF
+
 
 TIMEZONE="Europe/Istanbul"
 timedatectl set-timezone $TIMEZONE
@@ -46,3 +52,59 @@ cat << EOF >> $LIMITS_CONF
 * hard nofile 65535
 EOF
 
+# Bash history ayarları
+BASHRC="/etc/bash.bashrc"
+cp $BASHRC ${BASHRC}.bak.$(date +%F)
+
+cat << 'EOF' >> $BASHRC
+
+# History ayarları
+export HISTSIZE=10000
+export HISTFILESIZE=20000
+export HISTTIMEFORMAT="%F %T "
+export HISTCONTROL=ignoredups:erasedups
+shopt -s histappend
+PROMPT_COMMAND="history -a; history -c; history -r; $PROMPT_COMMAND"
+EOF
+
+# Journald log ayarları (disk kullanımını sınırla)
+JOURNALD_CONF="/etc/systemd/journald.conf"
+cp $JOURNALD_CONF ${JOURNALD_CONF}.bak.$(date +%F)
+
+sed -i 's/#SystemMaxUse=/SystemMaxUse=500M/' $JOURNALD_CONF
+sed -i 's/#SystemMaxFileSize=/SystemMaxFileSize=50M/' $JOURNALD_CONF
+sed -i 's/#MaxRetentionSec=/MaxRetentionSec=1month/' $JOURNALD_CONF
+
+systemctl restart systemd-journald
+
+# Kernel parametreleri (ek performans)
+cat << EOF >> $SYSCTL_CONF
+
+# Connection tracking table size
+net.netfilter.nf_conntrack_max = 262144
+
+# File descriptor ve inotify limitleri
+fs.file-max = 2097152
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 512
+
+# Shared memory
+kernel.shmmax = 68719476736
+kernel.shmall = 4294967296
+EOF
+
+sysctl -p
+
+# Monitoring araçları
+apt install -y htop iotop nethogs ncdu dstat
+
+# Disk I/O scheduler optimizasyonu (SSD için)
+echo "none" > /sys/block/sda/queue/scheduler 2>/dev/null || echo "noop" > /sys/block/sda/queue/scheduler 2>/dev/null
+
+# Persistent scheduler ayarı
+cat << 'EOF' > /etc/udev/rules.d/60-scheduler.rules
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
+ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline"
+EOF
+
+echo "Fine-tune işlemleri tamamlandı. Değişikliklerin tam olarak aktif olması için sistemi yeniden başlatmanız önerilir."
