@@ -106,5 +106,3 @@ cat << 'EOF' > /etc/udev/rules.d/60-scheduler.rules
 ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="0", ATTR{queue/scheduler}="none"
 ACTION=="add|change", KERNEL=="sd[a-z]", ATTR{queue/rotational}=="1", ATTR{queue/scheduler}="mq-deadline"
 EOF
-
-echo "Fine-tune işlemleri tamamlandı. Değişikliklerin tam olarak aktif olması için sistemi yeniden başlatmanız önerilir."
