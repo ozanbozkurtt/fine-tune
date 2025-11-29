@@ -35,6 +35,18 @@ vm.swappiness = 10
 
 vm.vfs_cache_pressure = 50
 
+# Connection tracking table size
+net.netfilter.nf_conntrack_max = 262144
+
+# File descriptor ve inotify limitleri
+fs.file-max = 2097152
+fs.inotify.max_user_watches = 524288
+fs.inotify.max_user_instances = 512
+
+# Shared memory
+kernel.shmmax = 68719476736
+kernel.shmall = 4294967296
+
 # Ağ (Yüksek trafik için)
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
@@ -76,24 +88,6 @@ sed -i 's/#SystemMaxFileSize=/SystemMaxFileSize=50M/' $JOURNALD_CONF
 sed -i 's/#MaxRetentionSec=/MaxRetentionSec=1month/' $JOURNALD_CONF
 
 systemctl restart systemd-journald
-
-# Kernel parametreleri (ek performans)
-cat << EOF >> $SYSCTL_CONF
-
-# Connection tracking table size
-net.netfilter.nf_conntrack_max = 262144
-
-# File descriptor ve inotify limitleri
-fs.file-max = 2097152
-fs.inotify.max_user_watches = 524288
-fs.inotify.max_user_instances = 512
-
-# Shared memory
-kernel.shmmax = 68719476736
-kernel.shmall = 4294967296
-EOF
-
-sysctl -p
 
 # Monitoring araçları
 apt install -y htop iotop nethogs ncdu dstat
