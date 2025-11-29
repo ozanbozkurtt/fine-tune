@@ -20,11 +20,14 @@ apt update -y && apt upgrade -y
 apt autoremove -y
 
 NET_INTERFACE="ens160"
+RING_BUFFER_SIZE=4096
 
 # tx off
 ethtool -K $NET_INTERFACE tx off
 # tx-checksum-ip-generic off
 ethtool -K $NET_INTERFACE tx-checksum-ip-generic off
+
+ethtool -G $NET_INTERFACE rx $RING_BUFFER_SIZE tx $RING_BUFFER_SIZE
 
 SYSCTL_CONF="/etc/sysctl.conf"
 cp $SYSCTL_CONF ${SYSCTL_CONF}.bak.$(date +%F)
@@ -48,6 +51,7 @@ kernel.shmmax = 68719476736
 kernel.shmall = 4294967296
 
 # Ağ (Yüksek trafik için)
+net.core.netdev_max_backlog = 16384
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
